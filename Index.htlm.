@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Irrigação automática — simulador 3D</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1220;--panel:#131f31;--line:#293b52;--text:#edf5ff;--muted:#9db0c7;--green:#35d07f;--blue:#55b9ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,Arial}
+header{padding:16px 18px;border-bottom:1px solid var(--line)}h1{font-size:20px;margin:0 0 4px}header p{margin:0;color:var(--muted);font-size:13px}
+main{max-width:1100px;margin:auto;padding:14px;display:grid;grid-template-columns:minmax(0,1fr) 270px;gap:14px}
+#stage{height:min(68vh,650px);min-height:390px;background:radial-gradient(ellipse at 50% 45%,#1a2d42,#0b1423 70%);border:1px solid var(--line);border-radius:16px;overflow:hidden;position:relative}
+canvas{display:block;width:100%;height:100%}.hint{position:absolute;left:12px;bottom:10px;color:#b7c8dc;background:#08111dcc;padding:7px 10px;border-radius:9px;font-size:12px;pointer-events:none}
+aside{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px;height:max-content}
+h2{font-size:15px;margin:0 0 12px}.group{padding:11px 0;border-top:1px solid var(--line)}.group:first-of-type{border-top:0}
+button{width:100%;border:1px solid #3b536e;background:#1c3047;color:var(--text);border-radius:10px;padding:11px;margin:4px 0;font-weight:650;cursor:pointer}
+button.active{background:#164a37;border-color:#299a68}button:focus{outline:2px solid var(--blue);outline-offset:2px}
+.status{font-size:13px;line-height:1.6;color:var(--muted)}.status strong{color:var(--text)}.lamp{display:inline-block;width:9px;height:9px;border-radius:50%;background:#586579;margin-right:7px}.lamp.on{background:var(--green);box-shadow:0 0 10px var(--green)}
+small{color:var(--muted);line-height:1.5;display:block;margin-top:12px}
+@media(max-width:760px){main{grid-template-columns:1fr}#stage{height:55vh;min-height:340px}aside{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}aside h2,.status,small{grid-column:1/-1}}
+</style>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+</head>
+<body>
+<header><h1>🌱 Sistema de irrigação automática — 3D</h1><p>Modelo didático interativo • arraste para girar • use a roda ou pinça para aproximar</p></header>
+<main>
+<section id="stage"><div class="hint">Arraste para girar · Pinça/roda para zoom · Botão direito para mover</div></section>
+<aside>
+<h2>Controles da simulação</h2>
+<div class="group"><strong>Umidade do solo</strong>
+<button id="dry" class="active">Solo seco</button><button id="wet">Solo úmido</button></div>
+<div class="group"><strong>Modo da bomba</strong>
+<button id="auto" class="active">Automático</button><button id="manual">Ligar bomba (manual)</button><button id="off">Desligar bomba</button></div>
+<div class="group status">
+<div><span id="sensorLamp" class="lamp"></span>Sensor: <strong id="sensorText">Solo seco</strong></div>
+<div><span id="relayLamp" class="lamp"></span>Relé: <strong id="relayText">Acionado</strong></div>
+<div><span id="pumpLamp" class="lamp"></span>Bomba: <strong id="pumpText">Ligada</strong></div>
+<div>Água: <strong id="waterText">Fluindo</strong></div>
+</div>
+<small>Este é um modelo visual para demonstrar a lógica do sistema. A montagem real depende das inscrições e especificações dos seus módulos; não use esta simulação como esquema de ligação elétrica.</small>
+</aside>
+</main>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+const stage=document.getElementById('stage');
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x0b1423);
+const camera=new THREE.PerspectiveCamera(42,1,.1,100);camera.position.set(8,6,9);
+const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;stage.appendChild(renderer.domElement);
+const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.target.set(0,1,0);controls.maxDistance=22;controls.minDistance=5;
+scene.add(new THREE.HemisphereLight(0xbddcff,0x253044,2));
+const key=new THREE.DirectionalLight(0xffffff,2.5);key.position.set(5,10,7);key.castShadow=true;scene.add(key);
+const mat=(c,r=.65,m=0)=>new THREE.MeshStandardMaterial({color:c,roughness:r,metalness:m});
+const green=mat(0x287d49),dark=mat(0x1a2635),board=mat(0x176b4b),blue=mat(0x236ba0),metal=mat(0x9aa8b8,.3,.7),black=mat(0x111820),red=mat(0xd94b45),white=mat(0xe4e9ee),soilMat=mat(0x795337),waterMat=new THREE.MeshStandardMaterial({color:0x28a9ef,transparent:true,opacity:.8,roughness:.2});
+function cube(parent,x,y,z,sx,sy,sz,material){let o=new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz),material);o.position.set(x,y,z);o.castShadow=true;o.receiveShadow=true;parent.add(o);return o}
+function cylinder(parent,x,y,z,r1,r2,h,material,segments=24){let o=new THREE.Mesh(new THREE.CylinderGeometry(r1,r2,h,segments),material);o.position.set(x,y,z);o.castShadow=true;parent.add(o);return o}
+function wire(points,color,r=.035){let curve=new THREE.CatmullRomCurve3(points.map(p=>new THREE.Vector3(...p)));let mesh=new THREE.Mesh(new THREE.TubeGeometry(curve,40,r,8,false),mat(color,.35,.1));scene.add(mesh);return mesh}
+const floor=cube(scene,0,-.18,0,12,.25,9,mat(0x172536));floor.receiveShadow=true;
+const bed=cube(scene,-2,.15,0,3.1,.55,2.3,soilMat);
+cube(scene,-2,.46,0,3.05,.12,2.25,mat(0x4d3828));
+for(let i=0;i<6;i++){let stem=cylinder(scene,-3.1+i*.43,.9,.05,.035,.045,.85,green,10);stem.rotation.z=(i%2?-.12:.12);let leaf=cube(scene,-3.1+i*.43,.96,.28,.42,.08,.18,green);leaf.rotation.z=.35}
+const sensor=cube(scene,-1.2,.95,-.55,.22,.12,.18,blue);cylinder(scene,-1.25,.55,-.55,.035,.035,.75,metal,12);cylinder(scene,-1.12,.55,-.55,.035,.035,.75,metal,12);
+const arduino=cube(scene,1.1,.35,-1.9,2.1,.18,1.2,board);cube(scene,1.1,.47,-1.9,.55,.08,.38,black);for(let i=0;i<10;i++)cube(scene,.25+i*.18,.49,-2.35,.07,.06,.14,metal);
+const relay=cube(scene,3.6,.35,-1.9,1.15,.18,.85,blue);cube(scene,3.65,.52,-1.9,.52,.3,.42,white);cube(scene,3.6,.73,-1.9,.22,.08,.22,black);
+const battery=cube(scene,1.0,.42,1.15,1.35,.8,.8,black);cube(scene,1,.85,1.15,.75,.08,.5,red);let plus=cylinder(scene,.65,.9,1.15,.09,.09,.12,red);let minus=cylinder(scene,1.35,.9,1.15,.09,.09,.12,metal);
+const pumpBody=cylinder(scene,4.2,.45,1.25,.38,.38,.95,white);pumpBody.rotation.z=Math.PI/2;cylinder(scene,3.72,.45,1.25,.18,.18,.16,blue).rotation.z=Math.PI/2;
+const outlet=cylinder(scene,4.45,.82,1.25,.11,.11,.3,white);outlet.rotation.x=Math.PI/2;
+wire([[-1.2,1.02,-.55],[-.4,1.5,-.8],[.1,.8,-1.5],[.3,.55,-1.9]],0x49d58a);
+wire([[2.1,.45,-1.9],[2.8,.45,-1.9],[3.05,.45,-1.9]],0xe5b94d);
+wire([[1,.85,1.15],[1.8,1.25,1.1],[3.2,1.25,1.2],[3.7,.5,1.25]],0xd94b45);
+wire([[1.35,.85,1.15],[2.2,.1,1.4],[3.8,.1,1.25]],0x9aa8b8);
+const hosePath=new THREE.CatmullRomCurve3([new THREE.Vector3(4.2,.9,1.25),new THREE.Vector3(4.6,1.25,1.25),new THREE.Vector3(4.8,1.2,.3),new THREE.Vector3(4.5,1.2,-.2),new THREE.Vector3(2.2,1.0,-.2),new THREE.Vector3(-2,1.05,-.2)]);
+const hose=new THREE.Mesh(new THREE.TubeGeometry(hosePath,100,.075,12,false),mat(0x3c9bd1,.35));scene.add(hose);
+const water=new THREE.Mesh(new THREE.TubeGeometry(hosePath,100,.032,8,false),waterMat);water.visible=true;scene.add(water);
+const label=(txt,pos)=>{let c=document.createElement('canvas');c.width=512;c.height=128;let ctx=c.getContext('2d');ctx.fillStyle='#07111ddd';ctx.fillRect(0,0,512,128);ctx.fillStyle='#f2f7ff';ctx.font='bold 42px Arial';ctx.fillText(txt,18,78);let tex=new THREE.CanvasTexture(c);let sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true}));sp.position.set(...pos);sp.scale.set(2.2,.55,1);scene.add(sp)};
+label('CANTEIRO / SENSOR',[-2,1.8,0]);label('ARDUINO',[1.1,1.35,-1.9]);label('MÓDULO RELÉ',[3.6,1.25,-1.9]);label('BATERIA',[1,1.45,1.15]);label('BOMBA',[4.2,1.45,1.25]);
+// Gotas visíveis: percorrem a mangueira e caem no canteiro quando a bomba está ligada.
+const drops=[];
+for(let i=0;i<22;i++){
+  const drop=new THREE.Mesh(new THREE.SphereGeometry(.055,10,8),mat(0x55c8ff,.18));
+  scene.add(drop); drops.push({mesh:drop,offset:i/22});
+}
+const spray=[];
+for(let i=0;i<12;i++){
+  const d=new THREE.Mesh(new THREE.SphereGeometry(.045,8,6),mat(0x72d7ff,.15));
+  scene.add(d); spray.push({mesh:d,phase:i/12});
+}
+let moisture='dry',mode='auto',pump=true;
+function update(){pump=mode==='manual'?true:mode==='off'?false:moisture==='dry';let relayOn=pump;
+document.getElementById('sensorText').textContent=moisture==='dry'?'Solo seco':'Solo úmido';
+document.getElementById('relayText').textContent=relayOn?'Acionado':'Desacionado';
+document.getElementById('pumpText').textContent=pump?'Ligada':'Desligada';
+document.getElementById('waterText').textContent=pump?'Fluindo':'Parada';
+document.getElementById('sensorLamp').classList.toggle('on',moisture==='wet');
+document.getElementById('relayLamp').classList.toggle('on',relayOn);document.getElementById('pumpLamp').classList.toggle('on',pump);
+water.visible=pump;
+drops.forEach(d=>d.mesh.visible=pump);
+spray.forEach(d=>d.mesh.visible=pump);
+document.getElementById('dry').classList.toggle('active',moisture==='dry');document.getElementById('wet').classList.toggle('active',moisture==='wet');
+['auto','manual','off'].forEach(id=>document.getElementById(id).classList.toggle('active',mode===id));
+}
+document.getElementById('dry').onclick=()=>{moisture='dry';mode='auto';update()};
+document.getElementById('wet').onclick=()=>{moisture='wet';mode='auto';update()};
+document.getElementById('auto').onclick=()=>{mode='auto';update()};
+document.getElementById('manual').onclick=()=>{mode='manual';update()};
+document.getElementById('off').onclick=()=>{mode='off';update()};
+function resize(){let w=stage.clientWidth,h=stage.clientHeight;camera.aspect=w/h;camera.updateProjectionMatrix();renderer.setSize(w,h)}
+new ResizeObserver(resize).observe(stage);resize();update();
+const clock=new THREE.Clock();
+function animate(){
+ requestAnimationFrame(animate);
+ const t=clock.getElapsedTime();
+ if(pump){
+   drops.forEach(d=>{
+     const u=(t*.32+d.offset)%1;
+     const pt=hosePath.getPoint(u);
+     d.mesh.position.copy(pt);
+   });
+   spray.forEach(d=>{
+     const u=(t*.8+d.phase)%1;
+     // Jato/aspersão saindo da ponta da mangueira sobre a terra.
+     d.mesh.position.set(-2+Math.sin(u* Math.PI*2)*(.18+u*.32),
+       1.0-u*.65,
+       -.2+Math.cos(u*Math.PI*2)*(.18+u*.32));
+   });
+ }
+ controls.update();renderer.render(scene,camera)
+}animate();
+</script>
+</body></html>
